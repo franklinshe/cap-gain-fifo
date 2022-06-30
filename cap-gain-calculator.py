@@ -38,14 +38,40 @@ print(pd.Timestamp.now(), "Reading input.xlsx")
 # Read input xlsx sheet to transactions dataframe
 transactions = pd.read_excel('input.xlsx')
 
-# Sort transactions dataframe by Timestamp and then IRS ID
-transactions = transactions.sort_values(by=['Timestamp', 'IRS ID'])
-
-
 # # 2. Validate and Insert Data into Transaction Queues
 
 # In[2]:
 print(pd.Timestamp.now(), "Validating input.xlsx")
+
+def validate_error(row_number, message):
+    ctypes.windll.user32.MessageBoxW(None, "Row " + str(row_number) + ": " + message, 'Validation of input.xlsx Failed', 0)
+    sys.exit("Row " + str(row_number) + ": " + message)
+
+# Validate transactions
+for index, row in transactions.iterrows():
+    if pd.isnull(row['Asset']):
+        validate_error(index + 2, "Asset is empty")
+    if pd.isnull(row['Units']) or row['Units'] == 0:
+        validate_error(index + 2, "Units is empty")
+    if pd.isnull(row['Total Amount']) or row['Total Amount'] < 0:
+        validate_error(index + 2, "Total Amount is empty or negative")
+    if pd.isnull(row['Timestamp']) or row['Timestamp'] > pd.Timestamp.now():
+        validate_error(index + 2, "Timestamp is empty or invalid")
+    if pd.isnull(row['IRS ID']):
+        validate_error(index + 2, "IRS ID is empty")
+    # Add transaction to respective deque
+    if row['Type'] == "Buy":
+        if row['Units'] < 0:
+            validate_error(index + 2, "Units is negative on a Buy transaction")
+    elif row['Type'] == "Sell":
+        if row['Units'] > 0:
+            validate_error(index + 2, "Units is positive on a Sell transaction")
+    else:
+        validate_error(index + 2, "Type is empty or neither Buy nor Sell")
+
+print(pd.Timestamp.now(), "Sorting transactions and inserting into queues")
+# Sort transactions dataframe by Timestamp and then IRS ID
+transactions = transactions.sort_values(by=['Timestamp', 'IRS ID'])
 
 # Create Transaction Queues
 asset_map = {}
@@ -53,23 +79,11 @@ asset_map = {}
 # Define buy and sell constants
 BUY, SELL = 0, 1
 
-def validate_error(row_number, message):
-    ctypes.windll.user32.MessageBoxW(None, "Row " + str(row_number) + ": " + message, 'Validation of input.xlsx Failed', 0)
-    sys.exit("Row " + str(row_number) + ": " + message)
 
-# Validate and insert into transaction queues
+# Insert into transaction queues
 for index, row in transactions.iterrows():
-    if pd.isnull(row['Asset']):
-        validate_error(index + 2, "Asset is empty")
-    if pd.isnull(row['Units']):
-        validate_error(index + 2, "Units is empty")
-    if pd.isnull(row['Total Amount']) or row['Total Amount'] <= 0:
-        validate_error(index + 2, "Total Amount is empty or negative")
-    if pd.isnull(row['Timestamp']) or row['Timestamp'] > pd.Timestamp.now():
-        validate_error(index + 2, "Timestamp is empty or invalid")
-    if pd.isnull(row['IRS ID']):
-        validate_error(index + 2, "IRS ID is empty")
 
+    # row['Timestamp'] = row['Timestamp'].to_pydatetime()
     # Create buy and sell deques for each asset
     asset = row['Asset']
     if asset not in asset_map:
@@ -79,16 +93,9 @@ for index, row in transactions.iterrows():
     
     # Add transaction to respective deque
     if row['Type'] == "Buy":
-        if row['Units'] < 0:
-            validate_error(index + 2, "Units is negative on a Buy transaction")
         asset_map[asset][BUY].appendleft(row)
-    elif row['Type'] == "Sell":
-        if row['Units'] > 0:
-            validate_error(index + 2, "Units is positive on a Sell transaction")
-        asset_map[asset][SELL].appendleft(row)
     else:
-        validate_error(index + 2, "Type is empty or neither Buy nor Sell")
-
+        asset_map[asset][SELL].appendleft(row)
 
 # # 3. Run FIFO Transaction Matching
 
@@ -122,7 +129,7 @@ for asset in asset_map:
     fifo[asset] = pd.DataFrame(columns = fieldnames)
     
     # Create dictionary to story volume statistics for asset
-    volume_summary = {'Gain / Loss': 0, 'Sale Price': 0, 'Basis': 0, 'Remainder Units': 0, 'Remainder Basis': 0}
+    volume_summary = {'Asset': 'Total', 'Gain / Loss': 0, 'Sale Price': 0, 'Basis': 0, 'Remainder Units': 0, 'Remainder Basis': 0}
     
     # Loop until no more sell transactions for that asset
     while asset_map[asset][SELL]:
@@ -145,8 +152,9 @@ for asset in asset_map:
             match['Basis'] = 0
             match['Gain / Loss'] = match['Sale Price']
             
-            match_df = pd.DataFrame([match])
-            margin = pd.concat([margin, match_df], ignore_index=True)
+            if abs(match['Units']) > .00000001:
+                match_df = pd.DataFrame([match])
+                margin = pd.concat([margin, match_df], ignore_index=True)
         
         # Non-margin fifo match
         else:
@@ -279,15 +287,22 @@ with pd.ExcelWriter('output.xlsx', engine='xlsxwriter') as writer:
     transactions.to_excel(writer, sheet_name='Input', index = False)
     for asset in fifo:
         fifo[asset].to_excel(writer, sheet_name=asset + ' FIFO', index = False)
-    summary.to_excel(writer, sheet_name='Summary', index = False)
+    summary.to_excel(writer, sheet_name='Summary', startrow = 1, index = False)
     margin.to_excel(writer, sheet_name='Margin', index = False)
        
     workbook  = writer.book
     
     currency_format = workbook.add_format({'num_format': '#,##0.00_);[Red](#,##0.00)'})
     unit_format = workbook.add_format({'num_format': '#,##0.00000000_);[Red](#,##0.00000000)'})
+    # timestamp_format = workbook.add_format({'num_format': 'mm/dd/yyyy hh:mm:ss'})
+    header_format = workbook.add_format({'bold': True, 'align': 'center', 'fg_color': '#C5D9F1'})
+    # top_format = workbook.add_format({'top': 1})
+
     
     worksheet = writer.sheets['Input']
+    # worksheet.hide_gridlines(2)
+    for col_num, value in enumerate(transactions.columns.values):
+            worksheet.write(0, col_num, value, header_format)
     worksheet.freeze_panes(1, 0)
     worksheet.set_column(0, 0, 20)
     worksheet.set_column(1, 2, 5)
@@ -297,25 +312,35 @@ with pd.ExcelWriter('output.xlsx', engine='xlsxwriter') as writer:
 
     for asset in fifo:
         worksheet = writer.sheets[asset + ' FIFO']
+        # worksheet.hide_gridlines(2)
+        for col_num, value in enumerate(fifo[asset].columns.values):
+            worksheet.write(0, col_num, value, header_format)
         worksheet.freeze_panes(1, 0)
         worksheet.set_column(0, 0, 5)
-        worksheet.set_column(1, 2, 20)
+        worksheet.set_column('B:C', 20)
         worksheet.set_column('D:D', 16, unit_format)
         worksheet.set_column('E:G', 16, currency_format)
         worksheet.set_column('H:I', 16, unit_format)
         worksheet.set_column(9, 10, 12)
 
     worksheet = writer.sheets['Summary']
-    worksheet.freeze_panes(1, 0)
-    worksheet.set_column(0, 0, 5)
+    # worksheet.hide_gridlines(2)
+    for col_num, value in enumerate(summary.columns.values):
+            worksheet.write(1   , col_num, value, header_format)
+    worksheet.merge_range('A1:F1', 'Capital Gain / Loss', workbook.add_format({'bold': True, 'size': 12, 'align': 'center'}))
+    worksheet.freeze_panes(2, 0)
+    worksheet.set_column(0, 0, 12)
     worksheet.set_column(1, 5, 12, currency_format)
     
     worksheet = writer.sheets['Margin']
+    # worksheet.hide_gridlines(2)
+    for col_num, value in enumerate(margin.columns.values):
+            worksheet.write(0, col_num, value, header_format)
     worksheet.freeze_panes(1, 0)
     worksheet.set_column(0, 0, 5)
-    worksheet.set_column(1, 2, 20)
+    worksheet.set_column('B:C', 20)
     worksheet.set_column('D:D', 16, unit_format)
     worksheet.set_column('E:G', 16, currency_format)
     worksheet.set_column('H:I', 16, unit_format)
     worksheet.set_column(9, 10, 12)
-
+# %%
