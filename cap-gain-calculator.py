@@ -29,8 +29,11 @@
 
 
 import sys
+import ctypes
 import pandas as pd
 from collections import deque
+
+print(pd.Timestamp.now(), "Reading input.xlsx")
 
 # Read input xlsx sheet to transactions dataframe
 transactions = pd.read_excel('input.xlsx')
@@ -42,7 +45,7 @@ transactions = transactions.sort_values(by=['Timestamp', 'IRS ID'])
 # # 2. Validate and Insert Data into Transaction Queues
 
 # In[2]:
-
+print(pd.Timestamp.now(), "Validating input.xlsx")
 
 # Create Transaction Queues
 asset_map = {}
@@ -50,18 +53,22 @@ asset_map = {}
 # Define buy and sell constants
 BUY, SELL = 0, 1
 
+def validate_error(row_number, message):
+    ctypes.windll.user32.MessageBoxW(None, "Row " + str(row_number) + ": " + message, 'Validation of input.xlsx Failed', 0)
+    sys.exit("Row " + str(row_number) + ": " + message)
+
 # Validate and insert into transaction queues
 for index, row in transactions.iterrows():
-    if row['Asset'] is None:
-        sys.exit("Row " + str(index + 2) + ": " + "Asset is empty")
-    if row['Units'] is None:
-        sys.exit("Row " + str(index + 2) + ": " + "Units is empty")
-    if row['Total Amount'] is None or row['Total Amount'] <= 0:
-        sys.exit("Row " + str(index + 2) + ": " + "Total Amount is empty or negative")
-    if row['Timestamp'] is None or row['Timestamp'] > pd.Timestamp.now():
-        sys.exit("Row " + str(index + 2) + ": " + "Total Amount is empty or invalid")
-    if row['IRS ID'] is None:
-        sys.exit("Row " + str(index + 2) + ": " + "IRS ID is empty")
+    if pd.isnull(row['Asset']):
+        validate_error(index + 2, "Asset is empty")
+    if pd.isnull(row['Units']):
+        validate_error(index + 2, "Units is empty")
+    if pd.isnull(row['Total Amount']) or row['Total Amount'] <= 0:
+        validate_error(index + 2, "Total Amount is empty or negative")
+    if pd.isnull(row['Timestamp']) or row['Timestamp'] > pd.Timestamp.now():
+        validate_error(index + 2, "Timestamp is empty or invalid")
+    if pd.isnull(row['IRS ID']):
+        validate_error(index + 2, "IRS ID is empty")
 
     # Create buy and sell deques for each asset
     asset = row['Asset']
@@ -73,20 +80,20 @@ for index, row in transactions.iterrows():
     # Add transaction to respective deque
     if row['Type'] == "Buy":
         if row['Units'] < 0:
-            sys.exit("Row " + str(index + 2) + ": " + "Units is negative on a Buy transaction")
+            validate_error(index + 2, "Units is negative on a Buy transaction")
         asset_map[asset][BUY].appendleft(row)
     elif row['Type'] == "Sell":
         if row['Units'] > 0:
-            sys.exit("Row " + str(index + 2) + ": " + "Units is positive on a Sell transaction")
+            validate_error(index + 2, "Units is positive on a Sell transaction")
         asset_map[asset][SELL].appendleft(row)
     else:
-        sys.exit("Row " + str(index + 2) + ": " + "Type is empty or neither Buy nor Sell")
+        validate_error(index + 2, "Type is empty or neither Buy nor Sell")
 
 
 # # 3. Run FIFO Transaction Matching
 
 # In[3]:
-
+print(pd.Timestamp.now(), "Running FIFO matching algorithm")
 
 # Define fieldnames
 fieldnames = ['Asset', 'Date Purchased', 'Date Sold', 'Units', 'Sale Price', 'Basis',
@@ -266,7 +273,7 @@ summary = summary.sort_values(by='Year')
 # # 4. Write and format dataframes into .xlsx file
 
 # In[4]:
-
+print(pd.Timestamp.now(), "Creating output.xlsx")
 
 with pd.ExcelWriter('output.xlsx', engine='xlsxwriter') as writer:
     transactions.to_excel(writer, sheet_name='Input', index = False)
@@ -311,10 +318,4 @@ with pd.ExcelWriter('output.xlsx', engine='xlsxwriter') as writer:
     worksheet.set_column('E:G', 16, currency_format)
     worksheet.set_column('H:I', 16, unit_format)
     worksheet.set_column(9, 10, 12)
-
-
-# In[ ]:
-
-
-
 
